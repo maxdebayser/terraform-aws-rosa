@@ -19,8 +19,8 @@ locals {
   cluster_type_tag      = "ocp"
   cluster_version       = "${var.ocp_version}_openshift"
 
-
 }
+
 module "setup_clis" {
   source = "github.com/cloud-native-toolkit/terraform-util-clis.git"
 
@@ -40,8 +40,9 @@ resource "null_resource" "create-rosa-cluster" {
     bin_dir            = local.bin_dir
     create_clsuter_cmd = local.create_clsuter_cmd
     cluster_name       = local.cluster_name
-    rosa_token        = var.rosa_token
-    region          = var.region
+    rosa_token         = var.rosa_token
+    region             = var.region
+    setup_sts          = tostring(var.secure-token-service)
   }
   depends_on = [
     module.setup_clis,
@@ -56,23 +57,44 @@ resource "null_resource" "create-rosa-cluster" {
     ${self.triggers.bin_dir}/rosa verify quota --region=${self.triggers.region}
     ${self.triggers.bin_dir}/rosa init --region=${self.triggers.region}
     ${self.triggers.bin_dir}/rosa create cluster ${self.triggers.create_clsuter_cmd}
+
+
+    if [ "${self.triggers.setup_sts}" = "true" ]; then
+      echo "Setting up STS resources"
+
+      cluster_id=$(${self.triggers.bin_dir}/rosa describe cluster -c ${self.triggers.cluster_name} -o json | ${self.triggers.bin_dir}/jq -r .id)
+
+      ${self.triggers.bin_dir}/rosa create operator-roles --mode auto -c $cluster_id --yes
+      ${self.triggers.bin_dir}/rosa create oidc-provider  --mode auto -c $cluster_id --yes
+    fi
     EOF
   }
 
- provisioner "local-exec" {
+  provisioner "local-exec" {
     when    = destroy
     command = <<-EOF
-      
+
+      ${self.triggers.bin_dir}/rosa login --token=${self.triggers.rosa_token}
+      ${self.triggers.bin_dir}/rosa init --region=${self.triggers.region}
+
+      cluster_id=$(${self.triggers.bin_dir}/rosa describe cluster -c ${self.triggers.cluster_name} -o json | ${self.triggers.bin_dir}/jq -r .id)
+
       ${path.module}/scripts/delete_cluster.sh ${self.triggers.cluster_name}  ${self.triggers.region} ${self.triggers.rosa_token} ${self.triggers.bin_dir} 
       
+      if [ "${self.triggers.setup_sts}" = "true" ]; then
+        echo "Tearing down STS resources"
+        ${self.triggers.bin_dir}/rosa delete operator-roles --mode auto -c $cluster_id --yes
+        ${self.triggers.bin_dir}/rosa delete oidc-provider  --mode auto -c $cluster_id --yes
+      fi
     EOF
     
   } 
 }
 
+
 resource null_resource wait-for-cluster-ready {
  depends_on = [null_resource.create-rosa-cluster]
-  
+
    triggers = {
     bin_dir            = local.bin_dir
     cluster_name       = local.cluster_name
