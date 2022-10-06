@@ -14,12 +14,46 @@ data external dirs {
     #/kube_config"//"${local.tmp_dir}/.kube"    
   }
 }
-resource "null_resource" "create_rosa_user" {
+
+locals {
+    create_user_script = <<-EOF
+    #!/bin/bash
+    export BIN_DIR=${local.bin_dir}
+    export ROSA_TOKEN=${var.rosa_token}
+    ${path.module}/scripts/create-rosa-user.sh ${var.cluster_name} ${var.region} ${data.external.dirs.result.tmp_dir} ${local.cred_file_name} ${local.cluster_info_file_name}
+    EOF
+    create_user_script_name = "create-user-script-${random_id.r.hex}.sh"
+}
+
+
+resource "null_resource" "write-apply-user-scripts" {
+  triggers = {
+    create_script          = local.create_user_script
+    create_script_name     = local.create_user_script_name
+    tmp_dir                = data.external.dirs.result.tmp_dir
+    cred_file_name         = local.cred_file_name
+    cluster_info_file_name = local.cluster_info_file_name
+    cluster_name           = local.cluster_name
+    region                 = var.region
+  }
   depends_on = [
     module.setup_clis,    
     null_resource.create-rosa-cluster,
     null_resource.wait-for-cluster-ready,
     data.external.dirs
+  ]
+
+  provisioner "local-exec" {
+    when    = create
+    command = <<-EOF
+    echo '${self.triggers.create_script}' > ${self.triggers.create_script_name}
+    EOF
+  }
+}
+
+resource "null_resource" "create_rosa_user" {
+  depends_on = [
+    null_resource.write-apply-user-scripts
   ]
    
   triggers = {
@@ -28,17 +62,12 @@ resource "null_resource" "create_rosa_user" {
     cluster_info_file_name=local.cluster_info_file_name
     cluster_name = local.cluster_name    
     region          = var.region
-    
+    create_script_name     = local.create_user_script_name
   }
   provisioner "local-exec" {
     when = create  
-      command = "${path.module}/scripts/create-rosa-user.sh ${self.triggers.cluster_name} ${self.triggers.region} ${self.triggers.tmp_dir} ${self.triggers.cred_file_name} ${self.triggers.cluster_info_file_name}  "
-    environment = {
-        BIN_DIR=module.setup_clis.bin_dir
-        ROSA_TOKEN=nonsensitive(var.rosa_token)      
-    }
+    command = "set -e; sh ${self.triggers.create_script_name}; rm ${self.triggers.create_script_name}"
   }
-
 }
 
 data external getClusterAdmin {
