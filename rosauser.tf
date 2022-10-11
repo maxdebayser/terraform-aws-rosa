@@ -14,13 +14,35 @@ data external dirs {
     #/kube_config"//"${local.tmp_dir}/.kube"    
   }
 }
-resource "null_resource" "create_rosa_user" {
+
+locals {
+    create_user_script = <<-EOF
+    #!/bin/bash
+    export BIN_DIR=${local.bin_dir}
+    export ROSA_TOKEN=${var.rosa_token}
+    ${path.module}/scripts/create-rosa-user.sh ${var.cluster_name} ${var.region} ${data.external.dirs.result.tmp_dir} ${local.cred_file_name} ${local.cluster_info_file_name}
+    EOF
+    create_user_script_name = "create-user-script-${random_id.r.hex}.sh"
+}
+
+
+data "external" "write-apply-user-scripts" {
+  program = ["bash", "-c", <<-EOF
+    set -e
+    echo '${local.create_user_script}' > ${local.create_user_script_name}
+    echo '{ "create_user": "${local.create_user_script_name}" }'
+  EOF
+  ]
+
   depends_on = [
     module.setup_clis,    
     null_resource.create-rosa-cluster,
     null_resource.wait-for-cluster-ready,
     data.external.dirs
   ]
+}
+
+resource "null_resource" "create_rosa_user" {
    
   triggers = {
     tmp_dir  = data.external.dirs.result.tmp_dir
@@ -28,17 +50,20 @@ resource "null_resource" "create_rosa_user" {
     cluster_info_file_name=local.cluster_info_file_name
     cluster_name = local.cluster_name    
     region          = var.region
-    
-  }
-  provisioner "local-exec" {
-    when = create  
-      command = "${path.module}/scripts/create-rosa-user.sh ${self.triggers.cluster_name} ${self.triggers.region} ${self.triggers.tmp_dir} ${self.triggers.cred_file_name} ${self.triggers.cluster_info_file_name}  "
-    environment = {
-        BIN_DIR=module.setup_clis.bin_dir
-        ROSA_TOKEN=nonsensitive(var.rosa_token)      
-    }
+    create_script_name  = data.external.write-apply-user-scripts.result.create_user
   }
 
+  depends_on = [
+    module.setup_clis,    
+    null_resource.create-rosa-cluster,
+    null_resource.wait-for-cluster-ready,
+    data.external.dirs
+  ]
+
+  provisioner "local-exec" {
+    when = create  
+    command = "set -e; sh ${self.triggers.create_script_name}; rm ${self.triggers.create_script_name}"
+  }
 }
 
 data external getClusterAdmin {
