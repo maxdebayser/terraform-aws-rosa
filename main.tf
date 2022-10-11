@@ -89,54 +89,21 @@ locals {
 }
 
 
-resource "null_resource" "write-apply-scripts" {
-  triggers = {
-    create_clsuter_cmd = local.create_clsuter_cmd
-    cluster_name       = local.cluster_name
-    region             = var.region
-    setup_sts          = tostring(var.secure-token-service)
-    create_script      = local.create_script
-    create_script_name = local.create_script_name
-    wait_script        = local.wait_script
-    wait_script_name   = local.wait_script_name
-  }
+data "external" write_scripts {
+  program = ["bash", "-c", <<-EOF
+    set -e
+    echo '${local.create_script}'  > ${local.create_script_name}
+    echo '${local.wait_script}'    > ${local.wait_script_name}
+    echo '${local.destroy_script}' > ${local.destroy_script_name}
+    echo '{ "create": "${local.create_script_name}", "wait": "${local.wait_script_name}", "destroy": "${local.destroy_script_name}" }'
+  EOF
+  ]
+
   depends_on = [
     module.setup_clis,
     null_resource.print_names
   ]
-
-  provisioner "local-exec" {
-    when    = create
-    command = <<-EOF
-    echo '${self.triggers.create_script}' > ${self.triggers.create_script_name}
-    echo '${self.triggers.wait_script}'   > ${self.triggers.wait_script_name}
-    EOF
-  }
 }
-
-
-resource "null_resource" "write-destroy-scripts" {
-  triggers = {
-    create_clsuter_cmd  = local.create_clsuter_cmd
-    cluster_name        = local.cluster_name
-    region              = var.region
-    setup_sts           = tostring(var.secure-token-service)
-    destroy_script      = local.destroy_script
-    destroy_script_name = local.destroy_script_name
-  }
-  depends_on = [
-    null_resource.create-rosa-cluster
-  ]
-
-  provisioner "local-exec" {
-    when    = destroy
-    command = <<-EOF
-    echo '${self.triggers.destroy_script}' > ${self.triggers.destroy_script_name}
-    EOF
-  } 
-}
-
-
 
 resource "null_resource" "create-rosa-cluster" {
   triggers = {
@@ -144,13 +111,12 @@ resource "null_resource" "create-rosa-cluster" {
     cluster_name        = local.cluster_name
     region              = var.region
     setup_sts           = tostring(var.secure-token-service)
-    create_script_name  = local.create_script_name
-    destroy_script_name = local.destroy_script_name
+    create_script_name  = data.external.write_scripts.result.create
+    destroy_script_name = data.external.write_scripts.result.destroy
   }
   depends_on = [
     module.setup_clis,
     null_resource.print_names,
-    null_resource.write-apply-scripts
   ]
 
   provisioner "local-exec" {
@@ -168,7 +134,7 @@ resource "null_resource" "create-rosa-cluster" {
 resource null_resource wait-for-cluster-ready {
  depends_on = [null_resource.create-rosa-cluster]
   triggers = {
-    wait_script_name = local.wait_script_name
+    wait_script_name  = data.external.write_scripts.result.wait
   }
 
   provisioner "local-exec" {
