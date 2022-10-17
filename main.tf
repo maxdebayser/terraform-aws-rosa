@@ -36,80 +36,110 @@ resource null_resource print_names {
   }
 }
 
-resource "null_resource" "create-rosa-cluster" {
-  triggers = {
-    bin_dir            = local.bin_dir
-    create_clsuter_cmd = local.create_clsuter_cmd
-    cluster_name       = local.cluster_name
-    rosa_token         = var.rosa_token
-    region             = var.region
-    setup_sts          = tostring(var.secure-token-service)
-  }
+resource "random_id" "r" {
+  byte_length = 4
+}
+
+locals {
+    create_script = <<-EOF
+    #!/bin/bash
+    export BIN_DIR=${local.bin_dir}
+    ${local.bin_dir}/rosa login --token=${var.rosa_token}
+    ${local.bin_dir}/rosa verify quota --region=${var.region}
+    ${local.bin_dir}/rosa init --region=${var.region}
+    ${local.bin_dir}/rosa create cluster ${local.create_clsuter_cmd}
+
+
+    if [ "${tostring(var.secure-token-service)}" = "true" ]; then
+      echo "Setting up STS resources"
+
+      cluster_id=$(${local.bin_dir}/rosa describe cluster -c ${var.cluster_name} -o json | ${local.bin_dir}/jq -r .id)
+
+      ${local.bin_dir}/rosa create operator-roles --mode auto -c $cluster_id --yes
+      ${local.bin_dir}/rosa create oidc-provider  --mode auto -c $cluster_id --yes
+    fi
+    EOF
+    create_script_name = "create-script-${random_id.r.hex}.sh"
+
+    destroy_script = <<-EOF
+    #!/bin/bash
+    export BIN_DIR=${local.bin_dir}
+    ${local.bin_dir}/rosa login --token=${var.rosa_token}
+    ${local.bin_dir}/rosa init --region=${var.region}
+
+    cluster_id=$(${local.bin_dir}/rosa describe cluster -c ${var.cluster_name} -o json | ${local.bin_dir}/jq -r .id)
+
+    ${path.module}/scripts/delete_cluster.sh ${var.cluster_name}  ${var.region} ${var.rosa_token} ${local.bin_dir} 
+    
+    if [ "${tostring(var.secure-token-service)}" = "true" ]; then
+      echo "Tearing down STS resources"
+      ${local.bin_dir}/rosa delete operator-roles --mode auto -c $cluster_id --yes
+      ${local.bin_dir}/rosa delete oidc-provider  --mode auto -c $cluster_id --yes
+    fi
+    EOF
+    destroy_script_name = "destroy-script-${random_id.r.hex}.sh"
+
+    wait_script = <<-EOF
+    #!/bin/bash
+    export BIN_DIR=${local.bin_dir}
+    export ROSA_TOKEN=${var.rosa_token}
+    ${path.module}/scripts/wait-for-cluster-ready.sh ${local.cluster_name} ${var.region}
+    EOF
+    wait_script_name = "wait-script-${random_id.r.hex}.sh"
+}
+
+
+data "external" write_scripts {
+  program = ["bash", "-c", <<-EOF
+    set -e
+    echo '${local.create_script}'  > ${local.create_script_name}
+    echo '${local.wait_script}'    > ${local.wait_script_name}
+    echo '${local.destroy_script}' > ${local.destroy_script_name}
+    echo '{ "create": "${local.create_script_name}", "wait": "${local.wait_script_name}", "destroy": "${local.destroy_script_name}" }'
+  EOF
+  ]
+
   depends_on = [
     module.setup_clis,
     null_resource.print_names
   ]
+}
 
+resource "null_resource" "create-rosa-cluster" {
+  triggers = {
+    create_clsuter_cmd  = local.create_clsuter_cmd
+    cluster_name        = local.cluster_name
+    region              = var.region
+    setup_sts           = tostring(var.secure-token-service)
+    create_script_name  = data.external.write_scripts.result.create
+    destroy_script_name = data.external.write_scripts.result.destroy
+  }
+  depends_on = [
+    module.setup_clis,
+    null_resource.print_names,
+  ]
 
   provisioner "local-exec" {
     when    = create
-    command = <<-EOF
-    ${self.triggers.bin_dir}/rosa login --token=${var.rosa_token}
-    ${self.triggers.bin_dir}/rosa verify quota --region=${self.triggers.region}
-    ${self.triggers.bin_dir}/rosa init --region=${self.triggers.region}
-    ${self.triggers.bin_dir}/rosa create cluster ${self.triggers.create_clsuter_cmd}
-
-
-    if [ "${self.triggers.setup_sts}" = "true" ]; then
-      echo "Setting up STS resources"
-
-      cluster_id=$(${self.triggers.bin_dir}/rosa describe cluster -c ${self.triggers.cluster_name} -o json | ${self.triggers.bin_dir}/jq -r .id)
-
-      ${self.triggers.bin_dir}/rosa create operator-roles --mode auto -c $cluster_id --yes
-      ${self.triggers.bin_dir}/rosa create oidc-provider  --mode auto -c $cluster_id --yes
-    fi
-    EOF
+    command = "set -e; sh ${self.triggers.create_script_name}; rm ${self.triggers.create_script_name}"
   }
 
   provisioner "local-exec" {
     when    = destroy
-    command = <<-EOF
-
-      ${self.triggers.bin_dir}/rosa login --token=${self.triggers.rosa_token}
-      ${self.triggers.bin_dir}/rosa init --region=${self.triggers.region}
-
-      cluster_id=$(${self.triggers.bin_dir}/rosa describe cluster -c ${self.triggers.cluster_name} -o json | ${self.triggers.bin_dir}/jq -r .id)
-
-      ${path.module}/scripts/delete_cluster.sh ${self.triggers.cluster_name}  ${self.triggers.region} ${self.triggers.rosa_token} ${self.triggers.bin_dir} 
-      
-      if [ "${self.triggers.setup_sts}" = "true" ]; then
-        echo "Tearing down STS resources"
-        ${self.triggers.bin_dir}/rosa delete operator-roles --mode auto -c $cluster_id --yes
-        ${self.triggers.bin_dir}/rosa delete oidc-provider  --mode auto -c $cluster_id --yes
-      fi
-    EOF
-    
+    command = "set -e; sh ${self.triggers.destroy_script_name}; rm ${self.triggers.destroy_script_name}"
   } 
 }
 
 
 resource null_resource wait-for-cluster-ready {
  depends_on = [null_resource.create-rosa-cluster]
-
-   triggers = {
-    bin_dir            = local.bin_dir
-    cluster_name       = local.cluster_name
-    rosa_token         = var.rosa_token    
+  triggers = {
+    wait_script_name  = data.external.write_scripts.result.wait
   }
+
   provisioner "local-exec" {
     when = create  
-    command = "${path.module}/scripts/wait-for-cluster-ready.sh ${local.cluster_name} ${var.region}"
-
-    environment = {
-      BIN_DIR=module.setup_clis.bin_dir
-      ROSA_TOKEN=nonsensitive(var.rosa_token)
-      
-    }
+    command = "set -e; sh ${self.triggers.wait_script_name}; rm ${self.triggers.wait_script_name}"
   }
 
 }
