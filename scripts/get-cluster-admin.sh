@@ -19,11 +19,12 @@ OCP_SERVER_URL=""
 CLUSTER_BASE_DOMAIN=""
 OPENSHIFT_VERSION=""
 CLUSTER_STATUS=""
+OIDC_PROVIDER=""
 
 
-eval "$(cat ${TMP_DIR}/${CLUSTER_INFO_FILE} | ${BIN_DIR}/jq -r '@sh "CLUSTER_ID=\(.id) OCP_CONSOLE_URL=\(.console.url) OCP_SERVER_URL=\(.api.url) CLUSTER_BASE_DOMAIN=\(.dns.base_domain) OPENSHIFT_VERSION=\(.openshift_version) CLUSTER_STATUS=\(.state)"')"
+eval "$(cat ${TMP_DIR}/${CLUSTER_INFO_FILE} | ${BIN_DIR}/jq -r '@sh "CLUSTER_ID=\(.id) OCP_CONSOLE_URL=\(.console.url) OCP_SERVER_URL=\(.api.url) CLUSTER_BASE_DOMAIN=\(.dns.base_domain) OPENSHIFT_VERSION=\(.openshift_version) CLUSTER_STATUS=\(.state) OIDC_PROVIDER=\(.aws.sts.oidc_endpoint_url)"')"
 
 
-echo "{\"adminUser\": \"${ADMIN_USER}\", \"adminPwd\": \"${ADMIN_PWD}\", \"clusterID\": \"${CLUSTER_ID}\",\"consoleUrl\": \"${OCP_CONSOLE_URL}\",\"serverURL\": \"${OCP_SERVER_URL}\", \"clusterDNS\": \"${CLUSTER_BASE_DOMAIN}\", \"openshiftVersion\": \"${OPENSHIFT_VERSION}\", \"clusterStatus\": \"${CLUSTER_STATUS}\"}"
+echo "{\"adminUser\": \"${ADMIN_USER}\", \"adminPwd\": \"${ADMIN_PWD}\", \"clusterID\": \"${CLUSTER_ID}\",\"consoleUrl\": \"${OCP_CONSOLE_URL}\",\"serverURL\": \"${OCP_SERVER_URL}\", \"clusterDNS\": \"${CLUSTER_BASE_DOMAIN}\", \"openshiftVersion\": \"${OPENSHIFT_VERSION}\", \"clusterStatus\": \"${CLUSTER_STATUS}\" \"oidcProvider\": \"${OIDC_PROVIDER}\"}"
 
 

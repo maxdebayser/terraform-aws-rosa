@@ -110,3 +110,11 @@ output "domainname" {
     data.external.getClusterAdmin
   ]
 }
+
+output "oidcProvider" {
+  description = "The OIDC provider used for STS"
+  value = data.external.getClusterAdmin.result.oidcProvider
+  depends_on  = [
+    data.external.getClusterAdmin
+  ]
+}
