@@ -23,9 +23,9 @@ locals {
 }
 
 module "setup_clis" {
-  source = "github.com/cloud-native-toolkit/terraform-util-clis.git"
+  source = "github.com/cloud-native-toolkit/terraform-util-clis.git?ref=v1.16.4"
 
-  clis   = ["jq", "igc", "rosa", "oc"]
+  clis   = ["jq", "rosa", "oc"]
 }
 resource null_resource print_names {
   provisioner "local-exec" {
